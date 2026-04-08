@@ -76,8 +76,29 @@ chmod +x setup.sh run_all.sh demos/*.sh
 │   ├── level_3.sh        # seccomp only
 │   ├── level_4.sh        # Landlock + netns
 │   └── level_5.sh        # Full sandwich
+├── tutorials/            # Step-by-step tutorials (work through these!)
+│   ├── 01_landlock_basics.py       # Landlock filesystem sandboxing
+│   ├── 02_network_namespaces.py    # Network namespace isolation
+│   ├── 03_seccomp_bpf.py           # Building seccomp BPF filters
+│   ├── 04_combining_layers.py      # Layering defenses together
+│   └── 05_sandbox_your_agent.py    # Adapt for your own agent
 └── workspace/            # Agent working directory (sandboxed writes go here)
 ```
+
+## Tutorials
+
+Work through these in order to understand how each layer works:
+
+```bash
+python3 tutorials/01_landlock_basics.py       # Filesystem restrictions
+python3 tutorials/02_network_namespaces.py    # Network isolation
+python3 tutorials/03_seccomp_bpf.py           # Syscall filtering
+python3 tutorials/04_combining_layers.py      # Putting it all together
+python3 tutorials/05_sandbox_your_agent.py    # Adapt for your agent
+```
+
+Each tutorial is interactive with hands-on exercises that run sandboxed
+code in subprocesses (so your tutorial process stays unrestricted).
 
 ## How It Works
 
