@@ -23,6 +23,19 @@ radius if an AI agent goes rogue (prompt injection, tool misuse, data exfiltrati
 | **4** | Landlock + netns | Filesystem + network combined |
 | **5** | Full sandwich | All three + user/PID/mount namespaces |
 
+### Bubblewrap Demos
+
+| Demo | Isolation | What it shows |
+|------|-----------|---------------|
+| **bwrap_basic** | Filesystem + PID + network ns | Selective bind mounts, no user namespace needed |
+| **bwrap_seccomp** | Above + seccomp | Defense-in-depth: syscall filtering on top |
+| **bwrap_network** | Filesystem + PID + domain whitelist | HTTP proxy filters allowed domains |
+
+Bubblewrap (`bwrap`) is a lightweight sandboxing tool — near-zero startup, no daemon,
+no container images. It uses kernel namespaces under the hood but doesn't require
+the AppArmor `unprivileged_userns` workaround because it's typically installed setuid
+or has the right capabilities. Ideal for sandboxing per-tool-call agent invocations.
+
 ## Quick Start
 
 ### Using uv (recommended)
@@ -44,6 +57,11 @@ chmod +x run_all.sh demos/*.sh
 # 5. Or run individual levels
 ./demos/level_0.sh    # Baseline
 ./demos/level_5.sh    # Full sandwich
+
+# 6. Bubblewrap demos (no user namespace workaround needed)
+bash demos/bwrap_basic.sh     # Filesystem + PID + network isolation
+bash demos/bwrap_seccomp.sh   # Above + seccomp syscall filtering
+bash demos/bwrap_network.sh   # Selective domain whitelist via proxy
 ```
 
 ### Using setup.sh
@@ -105,6 +123,8 @@ chmod +x setup.sh run_all.sh demos/*.sh
 ├── run_all.sh            # Master runner - all levels + comparison report
 ├── sandbox_config.yaml   # YAML config defining allowed paths, network, etc.
 ├── test_agent.py         # Test agent that probes all security boundaries
+├── test_bwrap_agent.py   # Bubblewrap test agent (adds HTTP domain tests)
+├── proxy_filter.py       # Python filtering HTTP proxy (domain whitelist)
 ├── seccomp_helper.py     # Pure-Python seccomp via ctypes (no pip package needed)
 ├── demos/
 │   ├── level_0.sh        # No sandbox (baseline)
@@ -112,7 +132,10 @@ chmod +x setup.sh run_all.sh demos/*.sh
 │   ├── level_2.sh        # netns only
 │   ├── level_3.sh        # seccomp only
 │   ├── level_4.sh        # Landlock + netns
-│   └── level_5.sh        # Full sandwich
+│   ├── level_5.sh        # Full sandwich
+│   ├── bwrap_basic.sh    # Bubblewrap filesystem sandbox
+│   ├── bwrap_seccomp.sh  # Bubblewrap + seccomp
+│   └── bwrap_network.sh  # Bubblewrap + domain whitelist proxy
 └── workspace/            # Agent working directory (sandboxed writes go here)
 ```
 
@@ -132,6 +155,47 @@ The test agent attempts operations in four categories:
 
 Each test reports whether the operation was ALLOWED or BLOCKED. The comparison
 report shows these side-by-side across all levels.
+
+### Bubblewrap Demos
+
+[Bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) is the low-level
+sandboxing primitive that Flatpak is built on. It provides:
+
+- **Near-zero startup** (~0ms vs 500ms–2s for containers)
+- **No daemon** — just a single binary
+- **Granular bind mounts** — expose exactly what the agent needs
+- **No container images** — works directly with host filesystem
+
+The three bwrap demos show progressively stronger isolation:
+
+1. **bwrap_basic** — Selective filesystem (`--ro-bind`, `--bind`), isolated PID
+   namespace (`--unshare-pid`), isolated network (`--unshare-net`), clean
+   environment (`--clearenv`). The agent sees only what you bind-mount.
+
+2. **bwrap_seccomp** — Adds seccomp syscall filtering on top. Even if the agent
+   escapes the filesystem sandbox, dangerous syscalls (ptrace, mount, bpf) are
+   blocked.
+
+3. **bwrap_network** — Selective domain access via filtering proxy. The agent gets
+   network access, but HTTP/HTTPS traffic is forced through a proxy that only
+   allows whitelisted domains (e.g., pypi.org, github.com). Architecture:
+   ```
+   agent (in bwrap) → proxy (127.0.0.1:8888) → internet (whitelisted only)
+   ```
+
+### Filtering Proxy (`proxy_filter.py`)
+
+A simple Python HTTP/HTTPS proxy that enforces a domain whitelist. Supports
+CONNECT tunneling (for HTTPS) and plain HTTP forwarding. No external
+dependencies — uses only stdlib (`http.server`, `socket`, `select`).
+
+```bash
+# Standalone usage
+python3 proxy_filter.py --port 8888 --allow pypi.org --allow github.com
+```
+
+For stronger enforcement where the agent can't bypass the proxy, combine with
+`--unshare-net` + a veth pair routing only to the proxy address.
 
 ### Seccomp Helper (`seccomp_helper.py`)
 
