@@ -25,6 +25,29 @@ radius if an AI agent goes rogue (prompt injection, tool misuse, data exfiltrati
 
 ## Quick Start
 
+### Using uv (recommended)
+
+```bash
+# 1. Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Install dependencies
+uv sync
+
+# 3. Run the test agent
+uv run python test_agent.py
+
+# 4. Run all demo levels
+chmod +x run_all.sh demos/*.sh
+./run_all.sh
+
+# 5. Or run individual levels
+./demos/level_0.sh    # Baseline
+./demos/level_5.sh    # Full sandwich
+```
+
+### Using setup.sh
+
 ```bash
 # 1. Setup (detects Ubuntu or RHEL, installs prerequisites)
 chmod +x setup.sh run_all.sh demos/*.sh
@@ -44,10 +67,22 @@ chmod +x setup.sh run_all.sh demos/*.sh
 ## Distro Support
 
 ### Ubuntu (20.04+)
-- User namespaces: enabled by default
 - Landlock: available in 22.04+ (kernel 5.15+)
 - seccomp: always available
-- No special setup needed
+- **Ubuntu 24.04+**: AppArmor restricts unprivileged user namespaces by default.
+  Levels 2, 4, and 5 (which use `unshare --user`) will fail unless you disable this:
+  ```bash
+  # Temporary (resets on reboot):
+  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+  # Persistent:
+  echo "kernel.apparmor_restrict_unprivileged_userns = 0" | sudo tee /etc/sysctl.d/99-userns.conf
+  sudo sysctl --system
+  ```
+  This restores the pre-24.04 default and is safe for development machines.
+  Tools like Podman rootless, Flatpak, and bubblewrap require the same setting.
+  On hardened production servers, prefer running the namespace demos with `sudo` instead.
+- Ubuntu 20.04–23.10: user namespaces enabled by default, no extra setup needed
 
 ### RHEL 9 / CentOS 9 / Rocky 9 / Alma 9
 - User namespaces: **disabled by default** (security hardening)
@@ -64,6 +99,8 @@ chmod +x setup.sh run_all.sh demos/*.sh
 
 ```
 .
+├── pyproject.toml        # Project config + dependencies (uv/pip)
+├── uv.lock               # Locked dependency versions
 ├── setup.sh              # Distro detection + prerequisite installer
 ├── run_all.sh            # Master runner - all levels + comparison report
 ├── sandbox_config.yaml   # YAML config defining allowed paths, network, etc.

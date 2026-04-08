@@ -92,7 +92,7 @@ for path in config.get('rw_paths', []):
     rs.allow(str(p))
     print(f'  Landlock allowed (RW): {p}')
 
-for extra in ['/proc', '/dev']:
+for extra in ['/proc', '/dev', '$PROJECT_DIR']:
     p = Path(extra)
     if p.exists():
         rs.allow(str(p))

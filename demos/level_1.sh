@@ -71,8 +71,9 @@ for path in config.get("rw_paths", []):
     rs.allow(str(p))
     print(f"  Allowed (RW): {p}")
 
-# Also allow /proc and /dev for basic operation
-for extra in ["/proc", "/dev"]:
+# Also allow /proc, /dev, and the project dir (for venv) for basic operation
+project_dir = os.getcwd()
+for extra in ["/proc", "/dev", project_dir]:
     p = Path(extra).resolve()
     if p.exists():
         rs.allow(str(p))
@@ -85,8 +86,10 @@ except Exception as e:
     print("Continuing without Landlock (kernel may not support it).\n")
 
 # Now run the test agent (Landlock restrictions are inherited)
+project_dir = os.getcwd()
 os.chdir("workspace")
-os.execvp("python3", ["python3", "test_agent.py", "--level", "1", "--json"])
+agent_path = os.path.join(project_dir, "test_agent.py")
+os.execvp("python3", ["python3", agent_path, "--level", "1", "--json"])
 PYEOF
 
 echo ""
