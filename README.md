@@ -136,6 +136,12 @@ chmod +x setup.sh run_all.sh demos/*.sh
 │   ├── bwrap_basic.sh    # Bubblewrap filesystem sandbox
 │   ├── bwrap_seccomp.sh  # Bubblewrap + seccomp
 │   └── bwrap_network.sh  # Bubblewrap + domain whitelist proxy
+├── proxy_setup/          # LLM API proxy for sandboxed agents
+│   ├── README.md         # Two-terminal setup guide
+│   ├── llm_proxy.py      # Reverse proxy for LLM API calls
+│   ├── example_agent.py  # Demo agent using the proxy
+│   ├── run_proxy.sh      # Terminal 1: start proxy
+│   └── run_agent.sh      # Terminal 2: run agent in bwrap
 └── workspace/            # Agent working directory (sandboxed writes go here)
 ```
 
@@ -196,6 +202,19 @@ python3 proxy_filter.py --port 8888 --allow pypi.org --allow github.com
 
 For stronger enforcement where the agent can't bypass the proxy, combine with
 `--unshare-net` + a veth pair routing only to the proxy address.
+
+### LLM API Proxy (`proxy_setup/`)
+
+For agents that need to call an LLM API (Anthropic, OpenAI, etc.), the
+`proxy_setup/` directory has a complete two-terminal setup:
+
+1. **Terminal 1**: Run `llm_proxy.py` — reverse proxy that forwards to the
+   real LLM API over HTTPS, logs all requests (including token usage)
+2. **Terminal 2**: Run the agent in bwrap with `ANTHROPIC_BASE_URL=http://localhost:9090`
+
+The agent uses plain HTTP to reach the proxy on loopback (no TLS issues).
+The proxy handles the real HTTPS connection. See [`proxy_setup/README.md`](proxy_setup/README.md)
+for the full guide.
 
 ### Seccomp Helper (`seccomp_helper.py`)
 
