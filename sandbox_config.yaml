@@ -1,0 +1,61 @@
+# ============================================================
+# Sandbox Configuration for AI Agent Kernel Security Demos
+# ============================================================
+# This file defines what the sandboxed agent can access.
+# Each demo level reads the relevant sections.
+
+# --- Filesystem (Landlock) ---
+# Paths the agent can read (system libraries, binaries, config)
+ro_paths:
+  - /usr
+  - /lib
+  - /lib64
+  - /bin
+  - /sbin
+  - /etc
+
+# Paths the agent can read AND write (workspace only)
+rw_paths:
+  - ./workspace
+  - /tmp/agent-sandbox
+
+# --- Network (netns) ---
+network:
+  # "loopback_only" = only lo interface (no internet)
+  # "none"          = no network at all
+  # "filtered"      = loopback + veth with host proxy (future)
+  mode: loopback_only
+
+# --- Agent Command ---
+command:
+  - python3
+  - test_agent.py
+
+working_dir: ./workspace
+
+env:
+  PYTHONUNBUFFERED: "1"
+  SANDBOX_DEMO: "1"
+
+# --- Seccomp (Level 3+) ---
+seccomp:
+  # Syscalls to explicitly allow (beyond the minimal safe set)
+  extra_allow: []
+  # Syscalls to explicitly block (on top of the default deny list)
+  extra_deny:
+    - ptrace
+    - mount
+    - umount2
+    - pivot_root
+    - kexec_load
+    - kexec_file_load
+    - bpf
+    - perf_event_open
+    - userfaultfd
+    - init_module
+    - finit_module
+    - delete_module
+    - reboot
+    - swapon
+    - swapoff
+    - acct

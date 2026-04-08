@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Sandbox workspace outputs (generated at runtime)
+workspace/results_*.json
+workspace/output_*.log
+workspace/sandbox_test_output.txt
+workspace/test_agent.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+*.tmp
