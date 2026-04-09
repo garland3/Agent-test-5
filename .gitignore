@@ -11,6 +11,10 @@ workspace/output_*.log
 workspace/sandbox_test_output.txt
 workspace/test_agent.py
 
+# Secrets
+.env
+*.env
+
 # OS
 .DS_Store
 Thumbs.db

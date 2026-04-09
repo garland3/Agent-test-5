@@ -30,6 +30,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Load .env if present (for API keys)
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    source "$SCRIPT_DIR/.env"
+    echo "(Loaded $SCRIPT_DIR/.env)"
+fi
+
 # Defaults
 UPSTREAM="${UPSTREAM:-https://api.anthropic.com}"
 PORT="${PORT:-9090}"

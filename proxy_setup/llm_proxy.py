@@ -98,6 +98,10 @@ class LLMProxy(http.server.BaseHTTPRequestHandler):
         skip_headers = {"host", "connection", "transfer-encoding",
                         "proxy-connection", "proxy-authorization",
                         "accept-encoding"}
+        # If proxy has its own key, strip agent's auth headers — proxy will inject
+        if self.api_key:
+            skip_headers.add("authorization")
+            skip_headers.add("x-api-key")
         for key, val in self.headers.items():
             if key.lower() not in skip_headers:
                 req.add_header(key, val)
@@ -105,8 +109,8 @@ class LLMProxy(http.server.BaseHTTPRequestHandler):
         # Set correct Host for upstream
         req.add_header("Host", parsed.netloc)
 
-        # Inject API key if we have one and the request doesn't already have auth
-        if self.api_key and not self.headers.get("x-api-key") and not self.headers.get("Authorization"):
+        # Inject API key if proxy has one configured
+        if self.api_key:
             if self.auth_style == "openai":
                 req.add_header("Authorization", f"Bearer {self.api_key}")
             else:
