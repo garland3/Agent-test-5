@@ -51,6 +51,7 @@ class LLMProxy(http.server.BaseHTTPRequestHandler):
 
     upstream_base: str = ""
     api_key: str = ""
+    auth_style: str = "anthropic"  # "anthropic" or "openai"
     request_log: list = []
     log_lock = threading.Lock()
     request_count: int = 0
@@ -106,7 +107,10 @@ class LLMProxy(http.server.BaseHTTPRequestHandler):
 
         # Inject API key if we have one and the request doesn't already have auth
         if self.api_key and not self.headers.get("x-api-key") and not self.headers.get("Authorization"):
-            req.add_header("x-api-key", self.api_key)
+            if self.auth_style == "openai":
+                req.add_header("Authorization", f"Bearer {self.api_key}")
+            else:
+                req.add_header("x-api-key", self.api_key)
 
         # Forward to upstream (disable redirect following)
         try:
@@ -226,11 +230,20 @@ The agent then uses: base_url="http://localhost:9090"
     LLMProxy.upstream_base = args.upstream
     LLMProxy.api_key = args.api_key or os.environ.get("LLM_API_KEY", "")
 
+    # Auto-detect auth style from upstream URL
+    if "openai" in args.upstream.lower():
+        LLMProxy.auth_style = "openai"
+    else:
+        LLMProxy.auth_style = "anthropic"
+
+    auth_header = "Authorization: Bearer" if LLMProxy.auth_style == "openai" else "x-api-key"
+
     print("=" * 60)
     print("  LLM API Reverse Proxy")
     print("=" * 60)
     print(f"  Listen:   http://{args.bind}:{args.port}")
     print(f"  Upstream: {args.upstream}")
+    print(f"  Auth:     {LLMProxy.auth_style} ({auth_header})")
     print(f"  API key:  {'injected (from --api-key or $LLM_API_KEY)' if LLMProxy.api_key else 'passthrough (agent provides)'}")
     print()
     print("  Agent config:")

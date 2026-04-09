@@ -43,12 +43,19 @@ cd proxy_setup
 # Basic — agent provides its own API key:
 bash run_proxy.sh
 
-# Or inject API key (agent never sees it — more secure):
+# Anthropic — inject API key (agent never sees it):
 bash run_proxy.sh --api-key $ANTHROPIC_API_KEY
 
-# Or for OpenAI:
-bash run_proxy.sh --upstream https://api.openai.com
+# OpenAI — same pattern, just change upstream + key:
+bash run_proxy.sh --upstream https://api.openai.com --api-key $OPENAI_API_KEY
+
+# Agent provides its own key (no injection):
+bash run_proxy.sh
 ```
+
+The proxy auto-detects the auth style from the upstream URL:
+- `api.anthropic.com` → injects `x-api-key` header
+- `api.openai.com` → injects `Authorization: Bearer` header
 
 You'll see:
 ```
@@ -57,6 +64,7 @@ You'll see:
 ============================================================
   Listen:   http://127.0.0.1:9090
   Upstream: https://api.anthropic.com
+  Auth:     anthropic (x-api-key)
   API key:  injected (from --api-key or $LLM_API_KEY)
 
   Request log:
@@ -94,11 +102,14 @@ iptables rules or `--unshare-net` + veth (see "Stronger Enforcement" below).
 
 ### 3. API Key Protection
 Run the proxy with `--api-key` and the key stays on the host — the agent
-never sees it. The proxy injects it into outbound requests.
+never sees it. The proxy injects the correct auth header automatically:
 
 ```bash
-# API key only exists outside the sandbox
+# Anthropic — proxy injects x-api-key header
 bash run_proxy.sh --api-key $ANTHROPIC_API_KEY
+
+# OpenAI — proxy injects Authorization: Bearer header
+bash run_proxy.sh --upstream https://api.openai.com --api-key $OPENAI_API_KEY
 
 # Agent sandbox has no API key, but calls still work
 bash run_agent.sh  # no --with-api-key needed
@@ -115,13 +126,21 @@ Most LLM SDKs support a `base_url` parameter or env var:
 ### Anthropic Python SDK
 ```python
 import anthropic
+
+# If proxy injects the key, use a dummy (SDK requires something):
 client = anthropic.Anthropic(
-    base_url="http://localhost:9090",  # your proxy
-    api_key="...",  # or let proxy inject it
+    base_url="http://localhost:9090",
+    api_key="proxy-handles-this",
+)
+
+# Or if agent has the real key:
+client = anthropic.Anthropic(
+    base_url="http://localhost:9090",
+    api_key=os.environ["ANTHROPIC_API_KEY"],
 )
 ```
 
-Or via env var:
+Or via env var (works with most tools that use the Anthropic SDK):
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:9090
 ```
@@ -129,9 +148,17 @@ export ANTHROPIC_BASE_URL=http://localhost:9090
 ### OpenAI Python SDK
 ```python
 from openai import OpenAI
+
+# If proxy injects the key:
 client = OpenAI(
     base_url="http://localhost:9090/v1",
-    api_key="...",
+    api_key="proxy-handles-this",
+)
+
+# Or if agent has the real key:
+client = OpenAI(
+    base_url="http://localhost:9090/v1",
+    api_key=os.environ["OPENAI_API_KEY"],
 )
 ```
 

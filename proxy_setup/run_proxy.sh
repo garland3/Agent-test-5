@@ -4,23 +4,27 @@
 # ============================================================
 # Run this first, then run_agent.sh in a second terminal.
 #
-# The proxy listens on localhost:8080 (plain HTTP) and forwards
+# The proxy listens on localhost:9090 (plain HTTP) and forwards
 # to the real LLM API (HTTPS). No TLS issues on the local leg.
+#
+# Auth header is auto-detected from the upstream URL:
+#   - api.anthropic.com → x-api-key
+#   - api.openai.com    → Authorization: Bearer
 #
 # Options:
 #   --upstream URL   Which LLM API to forward to
 #   --api-key KEY    Inject API key (keeps it out of the sandbox)
-#   --port PORT      Local port (default 8080)
+#   --port PORT      Local port (default 9090)
 #
 # Usage:
-#   # Basic (agent provides its own API key):
-#   ./run_proxy.sh
-#
-#   # With API key injection (agent never sees the key):
+#   # Anthropic (default):
 #   ./run_proxy.sh --api-key $ANTHROPIC_API_KEY
 #
-#   # For OpenAI instead:
-#   ./run_proxy.sh --upstream https://api.openai.com
+#   # OpenAI:
+#   ./run_proxy.sh --upstream https://api.openai.com --api-key $OPENAI_API_KEY
+#
+#   # Agent provides its own key (no injection):
+#   ./run_proxy.sh
 # ============================================================
 set -euo pipefail
 
