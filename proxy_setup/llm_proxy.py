@@ -173,6 +173,19 @@ class LLMProxy(http.server.BaseHTTPRequestHandler):
                               content_length, 0, str(e)[:80])
 
     def do_GET(self):
+        # Local info endpoint — not forwarded to upstream
+        if self.path == "/proxy/info":
+            info = json.dumps({
+                "upstream": self.upstream_base,
+                "auth_style": self.auth_style,
+                "requests": self.request_count,
+                "total_tokens": self.total_tokens,
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(info)
+            return
         self._forward()
 
     def do_POST(self):
