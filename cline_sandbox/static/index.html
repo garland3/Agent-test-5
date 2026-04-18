@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>cline_sandbox dashboard</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1f2630;
+    --border: #2b3340;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #7ee787;
+    --warn: #f1c40f;
+    --err: #ff7b72;
+    --stdout: #a5d6ff;
+    --stderr: #ffa198;
+  }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 10px 18px; background: var(--panel);
+    border-bottom: 1px solid var(--border); display: flex;
+    align-items: center; gap: 12px;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .status { color: var(--muted); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot.ok { background: var(--accent); }
+  .dot.warn { background: var(--warn); }
+  .dot.err { background: var(--err); }
+
+  main {
+    display: grid; grid-template-columns: 320px 1fr;
+    height: calc(100vh - 48px);
+  }
+  aside {
+    border-right: 1px solid var(--border); background: var(--panel);
+    overflow-y: auto; display: flex; flex-direction: column;
+  }
+  aside h2 { font-size: 12px; text-transform: uppercase; color: var(--muted);
+    padding: 12px 14px 4px; margin: 0; }
+  .sessions { list-style: none; padding: 0; margin: 0; }
+  .sessions li {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    cursor: pointer; font-size: 13px;
+  }
+  .sessions li:hover { background: var(--panel-2); }
+  .sessions li.active { background: var(--panel-2); border-left: 3px solid var(--accent); }
+  .sessions .id { font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--muted); font-size: 11px; }
+  .sessions .task { display: block; margin-top: 3px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sessions .state { font-size: 11px; color: var(--muted); }
+
+  section.content { display: flex; flex-direction: column; height: 100%; }
+
+  #create-panel {
+    padding: 14px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  #create-panel h2 { font-size: 13px; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 8px; }
+  #create-panel textarea {
+    width: 100%; box-sizing: border-box; background: var(--panel-2);
+    color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+    padding: 8px; font-family: ui-monospace, SFMono-Regular, monospace;
+    resize: vertical; min-height: 60px;
+  }
+  #create-panel .row { display: flex; gap: 8px; margin-top: 8px; }
+  input[type=text] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 8px; font-size: 13px; flex: 1;
+  }
+  button {
+    background: var(--accent); color: #0e1116; border: none; padding: 6px 12px;
+    border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary { background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); }
+  button.danger { background: var(--err); color: #0e1116; }
+  button.warn { background: var(--warn); color: #0e1116; }
+
+  #detail-panel { padding: 12px 14px; border-bottom: 1px solid var(--border);
+    background: var(--panel); display: flex; justify-content: space-between;
+    align-items: center; gap: 12px; flex-wrap: wrap; }
+  #detail-panel .id { font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px; color: var(--muted); }
+  #detail-panel .title { font-weight: 600; }
+  #detail-panel .meta { font-size: 12px; color: var(--muted); }
+  .controls { display: flex; gap: 6px; }
+
+  #events {
+    flex: 1; overflow-y: auto; padding: 10px 14px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px; line-height: 1.5;
+  }
+  .event { margin-bottom: 2px; white-space: pre-wrap; word-break: break-word; }
+  .event .t { color: var(--muted); margin-right: 8px; }
+  .event.stdout .k, .event.stdout .body { color: var(--stdout); }
+  .event.stderr .k, .event.stderr .body { color: var(--stderr); }
+  .event.error .k, .event.error .body { color: var(--err); }
+  .event.input .k { color: var(--accent); }
+  .event.input .body { color: var(--accent); font-style: italic; }
+  .event .k { color: var(--warn); margin-right: 6px; }
+
+  #message-panel {
+    padding: 10px 14px; background: var(--panel); border-top: 1px solid var(--border);
+    display: flex; gap: 8px;
+  }
+  #message-input { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>cline_sandbox</h1>
+  <span class="status" id="health">
+    <span class="dot warn"></span>connecting…
+  </span>
+  <span style="margin-left:auto;color:var(--muted);font-size:12px"
+        id="config-blurb"></span>
+</header>
+<main>
+  <aside>
+    <div id="create-panel">
+      <h2>New session</h2>
+      <textarea id="task-input"
+        placeholder="Describe the task — e.g. 'Refactor src/utils.ts to use async/await'"></textarea>
+      <div class="row">
+        <input id="command-input" type="text"
+               placeholder="agent command (leave blank for default)" />
+      </div>
+      <div class="row">
+        <button id="create-btn">Create</button>
+        <button id="refresh-btn" class="secondary">Refresh</button>
+      </div>
+    </div>
+    <h2>Sessions</h2>
+    <ul class="sessions" id="sessions"></ul>
+  </aside>
+
+  <section class="content">
+    <div id="detail-panel">
+      <div>
+        <div class="title" id="detail-title">No session selected</div>
+        <div class="id" id="detail-id"></div>
+        <div class="meta" id="detail-meta"></div>
+      </div>
+      <div class="controls" id="controls"></div>
+    </div>
+    <div id="events"></div>
+    <div id="message-panel">
+      <input id="message-input" type="text" disabled
+             placeholder="Type to send to the agent's stdin…" />
+      <button id="send-btn" disabled>Send</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { sessions: [], current: null, es: null };
+
+async function api(path, opts = {}) {
+  const token = localStorage.getItem("auth_token");
+  opts.headers = Object.assign({"Content-Type": "application/json"},
+                               opts.headers || {});
+  if (token) opts.headers["X-Auth-Token"] = token;
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`${r.status}: ${text}`);
+  }
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+async function refreshHealth() {
+  try {
+    const h = await api("/healthz");
+    const cfg = await api("/config");
+    const dotClass = h.status === "ok" ? "ok" : "warn";
+    $("health").innerHTML = `<span class="dot ${dotClass}"></span>${h.status} — `
+      + `${h.active_sessions} active / ${h.total_sessions} total`;
+    $("config-blurb").textContent =
+      `agent: ${cfg.agent_command} · seccomp: ${cfg.enable_seccomp} · `
+      + `netns: ${cfg.unshare_net ? "isolated" : "shared"}`;
+  } catch (e) {
+    $("health").innerHTML =
+      `<span class="dot err"></span>offline: ${e.message}`;
+  }
+}
+
+async function refreshSessions() {
+  try {
+    state.sessions = await api("/sessions");
+    state.sessions.sort((a, b) => b.created_at - a.created_at);
+    renderSessions();
+  } catch (e) { console.error(e); }
+}
+
+function renderSessions() {
+  const ul = $("sessions");
+  ul.innerHTML = "";
+  for (const s of state.sessions) {
+    const li = document.createElement("li");
+    li.className = state.current === s.id ? "active" : "";
+    li.innerHTML =
+      `<span class="id">${escapeHtml(String(s.id).slice(0, 12))}</span>`
+      + ` <span class="state">[${escapeHtml(String(s.state))}]</span>`
+      + `<span class="task">${escapeHtml(String(s.task || "").slice(0, 80))}</span>`;
+    li.addEventListener("click", () => selectSession(s.id));
+    ul.appendChild(li);
+  }
+}
+
+async function selectSession(id) {
+  state.current = id;
+  renderSessions();
+  if (state.es) { state.es.close(); state.es = null; }
+  $("events").innerHTML = "";
+
+  try {
+    // textContent is safe (no HTML parsing) but slice defensively on
+    // each untrusted field so an agent can't push a 1 MiB "state"
+    // string into the DOM.
+    const detail = await api(`/sessions/${id}`);
+    $("detail-title").textContent = String(detail.task || "").slice(0, 200);
+    $("detail-id").textContent =
+      String(detail.id).slice(0, 64) + "  ·  pid " + (detail.pid ?? "–");
+    $("detail-meta").textContent =
+      String(detail.state).slice(0, 20)
+      + " · cmd: " + String(detail.agent_command || "").slice(0, 200)
+      + " · exit: " + (detail.exit_code ?? "–");
+    renderControls(detail);
+    const inputOk = ["running", "paused"].includes(detail.state);
+    $("message-input").disabled = !inputOk;
+    $("send-btn").disabled = !inputOk;
+  } catch (e) {
+    $("detail-title").textContent = "error: " + e.message;
+    return;
+  }
+
+  // SSE stream (includes replay of history from server)
+  const token = localStorage.getItem("auth_token");
+  const url = token
+    ? `/sessions/${id}/stream?token=${encodeURIComponent(token)}`
+    : `/sessions/${id}/stream`;
+  state.es = new EventSource(url);
+  state.es.onerror = () => { /* reconnect handled by browser */ };
+  const render = (ev) => appendEvent(JSON.parse(ev.data));
+  ["created","spawning","started","stdout","stderr","input","paused",
+   "resumed","stopping","killed","exited","timeout","error",
+   "stream-error"].forEach(k => state.es.addEventListener(k, render));
+  state.es.addEventListener("end", () => {
+    appendEvent({kind: "stream-end", time: Date.now()/1000, data: {}});
+  });
+}
+
+function renderControls(detail) {
+  const c = $("controls"); c.innerHTML = "";
+  const terminal = ["completed","failed","killed","error"].includes(detail.state);
+  if (!terminal) {
+    addBtn(c, "Pause",   "warn",    () => action(detail.id, "pause"),
+           detail.state !== "running");
+    addBtn(c, "Resume",  "secondary", () => action(detail.id, "resume"),
+           detail.state !== "paused");
+    addBtn(c, "Stop",    "secondary", () => action(detail.id, "stop"));
+    addBtn(c, "Kill",    "danger",  () => action(detail.id, "kill"));
+  } else {
+    const s = document.createElement("span");
+    s.className = "meta"; s.textContent = "session finished";
+    c.appendChild(s);
+  }
+}
+
+function addBtn(parent, label, cls, handler, disabled=false) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.className = cls;
+  b.disabled = disabled;
+  b.addEventListener("click", handler);
+  parent.appendChild(b);
+}
+
+async function action(id, verb) {
+  try {
+    await api(`/sessions/${id}/${verb}`, {method: "POST"});
+    await refreshSessions();
+    if (state.current === id) selectSession(id);
+  } catch (e) { alert(`${verb} failed: ${e.message}`); }
+}
+
+function appendEvent(ev) {
+  const wrap = $("events");
+  const div = document.createElement("div");
+  // `kind` is server-controlled today but could in the future carry
+  // agent-influenced strings — escape it before composing HTML.
+  const rawKind = String(ev.kind || "?");
+  const kindSafe = rawKind.replace(/[^a-zA-Z0-9_-]/g, "_");
+  div.className = `event ${kindSafe}`;
+  const t = new Date((ev.time || 0) * 1000).toLocaleTimeString();
+  let body = "";
+  if (ev.data && ev.data.text !== undefined) body = ev.data.text;
+  else if (ev.data && ev.data.content !== undefined)
+    body = "> " + ev.data.content;
+  else body = JSON.stringify(ev.data || {});
+  div.innerHTML = `<span class="t">${escapeHtml(t)}</span>`
+    + `<span class="k">[${escapeHtml(rawKind)}]</span>`
+    + `<span class="body">${escapeHtml(body)}</span>`;
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+$("create-btn").addEventListener("click", async () => {
+  const task = $("task-input").value.trim();
+  if (!task) { alert("task required"); return; }
+  const command = $("command-input").value.trim();
+  try {
+    const s = await api("/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        task,
+        agent_command: command || null,
+      }),
+    });
+    $("task-input").value = "";
+    await refreshSessions();
+    selectSession(s.id);
+  } catch (e) { alert("create failed: " + e.message); }
+});
+
+$("refresh-btn").addEventListener("click", refreshSessions);
+
+$("send-btn").addEventListener("click", async () => {
+  const msg = $("message-input").value;
+  if (!msg || !state.current) return;
+  try {
+    await api(`/sessions/${state.current}/message`, {
+      method: "POST",
+      body: JSON.stringify({content: msg}),
+    });
+    $("message-input").value = "";
+  } catch (e) { alert("send failed: " + e.message); }
+});
+
+$("message-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("send-btn").click();
+});
+
+refreshHealth(); refreshSessions();
+setInterval(refreshHealth, 5000);
+setInterval(refreshSessions, 4000);
+</script>
+</body>
+</html>
