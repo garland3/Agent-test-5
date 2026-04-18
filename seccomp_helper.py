@@ -137,6 +137,21 @@ SYSCALL_NUMBERS_X86_64 = {
     "unshare": 272, "setns": 308, "clone3": 435,
     "io_uring_setup": 425, "io_uring_enter": 426,
     "io_uring_register": 427,
+    # Additional escape / privilege-escalation primitives
+    "keyctl": 250, "add_key": 248, "request_key": 249,
+    "process_vm_readv": 310, "process_vm_writev": 311,
+    "process_madvise": 440,
+    "move_mount": 429, "open_tree": 428, "fsopen": 430,
+    "fsconfig": 431, "fsmount": 432, "fspick": 433,
+    "mount_setattr": 442,
+    "pidfd_send_signal": 424, "pidfd_open": 434, "pidfd_getfd": 438,
+    "seccomp": 317, "modify_ldt": 154,
+    "iopl": 172, "ioperm": 173,
+    "create_module": 174, "query_module": 178, "get_kernel_syms": 177,
+    "quotactl": 179, "quotactl_fd": 443,
+    "name_to_handle_at": 303, "open_by_handle_at": 304,
+    "fanotify_init": 300, "fanotify_mark": 301,
+    "lookup_dcookie": 212,
 }
 
 # ---- BPF Instruction Builder ----
@@ -218,22 +233,41 @@ SAFE_SYSCALLS = [
     "sched_yield",
 ]
 
-# Dangerous syscalls - these are what seccomp should block
+# Dangerous syscalls - these are what seccomp should block.
+# Kept deliberately broad: the agent does not need any of these for
+# ordinary work (read/write/network/process), and each is a documented
+# escape primitive or privilege-escalation vector.
 DANGEROUS_SYSCALLS = [
-    "ptrace",           # Process debugging/tracing - escape vector
-    "mount", "umount2", # Filesystem manipulation
-    "pivot_root",       # Change root filesystem
-    "kexec_load", "kexec_file_load",  # Load new kernel
-    "bpf",              # BPF programs - powerful kernel interface
-    "perf_event_open",  # Performance monitoring - info leak
-    "userfaultfd",      # User-space page fault handling - exploit aid
-    "init_module", "finit_module", "delete_module",  # Kernel modules
-    "reboot",           # System reboot
-    "swapon", "swapoff",  # Swap management
-    "acct",             # Process accounting
-    "unshare",          # Create new namespaces (prevent further ns creation)
-    "setns",            # Join namespaces
-    "io_uring_setup", "io_uring_enter", "io_uring_register",  # io_uring (complex attack surface)
+    # Debugging / cross-process memory
+    "ptrace", "process_vm_readv", "process_vm_writev", "process_madvise",
+    # Filesystem mount manipulation (classic and new-mount-API)
+    "mount", "umount2", "pivot_root",
+    "move_mount", "open_tree", "fsopen", "fsconfig", "fsmount",
+    "fspick", "mount_setattr",
+    # Kernel code loading
+    "kexec_load", "kexec_file_load",
+    "init_module", "finit_module", "delete_module",
+    "create_module", "query_module", "get_kernel_syms",
+    # Other powerful kernel interfaces
+    "bpf", "perf_event_open", "userfaultfd",
+    "reboot", "swapon", "swapoff", "acct",
+    "quotactl", "quotactl_fd",
+    # Namespace manipulation (prevent further nesting / privileged ns)
+    "unshare", "setns",
+    # io_uring (complex attack surface, bypass of some seccomp patterns)
+    "io_uring_setup", "io_uring_enter", "io_uring_register",
+    # pidfd — can send signals across namespaces / steal file descriptors
+    "pidfd_send_signal", "pidfd_open", "pidfd_getfd",
+    # Kernel keyring — CVE-rich
+    "keyctl", "add_key", "request_key",
+    # Direct modification of seccomp, LDT, I/O ports
+    "seccomp", "modify_ldt", "iopl", "ioperm",
+    # File handle bypass of path-based checks
+    "name_to_handle_at", "open_by_handle_at",
+    # Filesystem event listeners (information leak + DoS)
+    "fanotify_init", "fanotify_mark",
+    # Audit info leak
+    "lookup_dcookie",
 ]
 
 
@@ -300,9 +334,74 @@ def build_allowlist_filter(allowed_syscalls: list[str],
     return b"".join(instructions)
 
 
+def build_denylist_filter(denied_syscalls: list[str],
+                          default_action: int = SECCOMP_RET_ERRNO | 1,
+                          log_blocked: bool = False) -> bytes:
+    """
+    Build a BPF program that blocks the named syscalls and allows
+    everything else. Useful for Node.js / JIT-heavy agents where an
+    allowlist is too restrictive.
+    """
+    if log_blocked:
+        default_action = SECCOMP_RET_LOG
+
+    # Warn if any names in the denylist aren't known — otherwise they
+    # silently become no-ops and a blocked operation looks safe when
+    # it actually isn't.
+    for name in denied_syscalls:
+        if name not in SYSCALL_NUMBERS_X86_64:
+            print(f"  WARNING: seccomp denylist references unknown "
+                  f"syscall '{name}' — it will NOT be blocked.",
+                  file=sys.stderr)
+
+    instructions = []
+
+    # 1. Arch check (kill on mismatch to prevent ABI confusion)
+    instructions.append(bpf_stmt(BPF_LD | BPF_W | BPF_ABS, OFFSET_ARCH))
+    instructions.append(bpf_jump(BPF_JMP | BPF_JEQ | BPF_K,
+                                 AUDIT_ARCH_X86_64, 1, 0))
+    instructions.append(bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS))
+
+    # 2. Load syscall number, then kill if the x32 ABI bit is set.
+    # Without this, an attacker can invoke syscalls via the x32 ABI
+    # (nr | 0x40000000) and bypass every JEQ below, which compare
+    # against the plain nr. BPF_JSET tests (A & K) != 0; the accumulator
+    # is not modified, so the nr is still in A for the JEQ chain.
+    instructions.append(bpf_stmt(BPF_LD | BPF_W | BPF_ABS, OFFSET_NR))
+    X32_SYSCALL_BIT = 0x40000000
+    BPF_JSET = 0x40
+    instructions.append(bpf_jump(BPF_JMP | BPF_JSET | BPF_K,
+                                 X32_SYSCALL_BIT, 0, 1))
+    instructions.append(bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS))
+
+    # 3. For each denied syscall: if nr == X, jump to DENY.
+    # DENY is placed at the end; ALLOW falls through right after the JEQs.
+    syscall_nums = sorted(set(
+        SYSCALL_NUMBERS_X86_64[name]
+        for name in denied_syscalls
+        if name in SYSCALL_NUMBERS_X86_64
+    ))
+
+    n = len(syscall_nums)
+    # Layout after this loop:
+    #   [JEQs...]    (n instructions)
+    #   [RET ALLOW]  <-- fall-through target
+    #   [RET DENY]   <-- jump target for each JEQ
+    # JEQ jumps need: jt = (n - i - 1) + 1  (skip remaining JEQs + ALLOW)
+    for i, nr in enumerate(syscall_nums):
+        jt = (n - i - 1) + 1
+        instructions.append(bpf_jump(BPF_JMP | BPF_JEQ | BPF_K, nr, jt, 0))
+
+    instructions.append(bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_ALLOW))
+    instructions.append(bpf_stmt(BPF_RET | BPF_K, default_action))
+
+    return b"".join(instructions)
+
+
 def apply_seccomp_filter(allowed_syscalls: list[str] = None,
                          mode: str = "strict",
-                         log_only: bool = False) -> bool:
+                         log_only: bool = False,
+                         denied_syscalls: list[str] = None) -> bool:
     """
     Apply a seccomp BPF filter to the current process.
 
@@ -314,7 +413,8 @@ def apply_seccomp_filter(allowed_syscalls: list[str] = None,
     Returns:
         True if successfully applied, False otherwise.
     """
-    if allowed_syscalls is None:
+    use_denylist = denied_syscalls is not None
+    if allowed_syscalls is None and not use_denylist:
         allowed_syscalls = SAFE_SYSCALLS
 
     # Determine default action for blocked syscalls
@@ -328,11 +428,19 @@ def apply_seccomp_filter(allowed_syscalls: list[str] = None,
         default_action = SECCOMP_RET_KILL_PROCESS
         mode_desc = "STRICT (kill on violation)"
 
-    print(f"  Seccomp mode: {mode_desc}")
-    print(f"  Allowed syscalls: {len(allowed_syscalls)}")
-
     # Build the BPF program
-    prog_bytes = build_allowlist_filter(allowed_syscalls, default_action, log_only)
+    if use_denylist:
+        print(f"  Seccomp mode: {mode_desc} (denylist)", file=sys.stderr)
+        print(f"  Denied syscalls: {len(denied_syscalls)}", file=sys.stderr)
+        prog_bytes = build_denylist_filter(
+            denied_syscalls, default_action, log_only
+        )
+    else:
+        print(f"  Seccomp mode: {mode_desc}", file=sys.stderr)
+        print(f"  Allowed syscalls: {len(allowed_syscalls)}", file=sys.stderr)
+        prog_bytes = build_allowlist_filter(
+            allowed_syscalls, default_action, log_only
+        )
     n_instructions = len(prog_bytes) // 8  # each instruction is 8 bytes
 
     # struct sock_fprog { unsigned short len; struct sock_filter *filter; };
@@ -371,17 +479,18 @@ def apply_seccomp_filter(allowed_syscalls: list[str] = None,
     ret = libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
     if ret != 0:
         errno = ctypes.get_errno()
-        print(f"  Failed to set NO_NEW_PRIVS: errno={errno}")
+        print(f"  Failed to set NO_NEW_PRIVS: errno={errno}", file=sys.stderr)
         return False
 
     # Step 2: Apply the seccomp filter
     ret = libc.prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ctypes.byref(prog), 0, 0)
     if ret != 0:
         errno = ctypes.get_errno()
-        print(f"  Failed to apply seccomp filter: errno={errno}")
+        print(f"  Failed to apply seccomp filter: errno={errno}", file=sys.stderr)
         return False
 
-    print(f"  Seccomp filter applied ({n_instructions} BPF instructions)")
+    print(f"  Seccomp filter applied ({n_instructions} BPF instructions)",
+          file=sys.stderr)
     return True
 
 
@@ -406,16 +515,53 @@ def get_seccomp_status() -> dict:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Apply seccomp filter (pure ctypes)")
-    parser.add_argument("--mode", choices=["strict", "permissive", "log"], default="permissive",
+    parser = argparse.ArgumentParser(
+        description="Apply seccomp filter (pure ctypes)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--mode", choices=["strict", "permissive", "log"],
+                        default="permissive",
                         help="Enforcement mode")
-    parser.add_argument("--test", action="store_true", help="Apply filter and run basic tests")
+    parser.add_argument("--test", action="store_true",
+                        help="Apply filter and run basic tests")
+    parser.add_argument("--deny", action="store_true",
+                        help="Use denylist (block DANGEROUS_SYSCALLS) "
+                             "instead of allowlist. Recommended for "
+                             "Node.js/JIT agents.")
+    parser.add_argument("--exec", dest="exec_mode", action="store_true",
+                        help="Apply filter then execvp() the remaining "
+                             "argv (everything after --).")
+    parser.add_argument("cmd", nargs=argparse.REMAINDER,
+                        help="Command to exec after applying the filter "
+                             "(requires --exec).")
     args = parser.parse_args()
+
+    if args.exec_mode:
+        denied = DANGEROUS_SYSCALLS if args.deny else None
+        ok = apply_seccomp_filter(mode=args.mode, denied_syscalls=denied)
+        if not ok:
+            print("Failed to apply seccomp filter; aborting exec.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        cmd = args.cmd
+        if cmd and cmd[0] == "--":
+            cmd = cmd[1:]
+        if not cmd:
+            print("--exec requires a command after --", file=sys.stderr)
+            sys.exit(2)
+
+        try:
+            os.execvp(cmd[0], cmd)
+        except OSError as exc:
+            print(f"execvp({cmd[0]!r}) failed: {exc}", file=sys.stderr)
+            sys.exit(127)
 
     print("=== Seccomp Helper (Pure Python/ctypes) ===")
     print(f"Before: {get_seccomp_status()}")
 
-    ok = apply_seccomp_filter(mode=args.mode)
+    denied = DANGEROUS_SYSCALLS if args.deny else None
+    ok = apply_seccomp_filter(mode=args.mode, denied_syscalls=denied)
     print(f"Applied: {ok}")
     print(f"After:  {get_seccomp_status()}")
 

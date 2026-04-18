@@ -1,5 +1,14 @@
 # AI Agent Kernel Security Sandbox Demo
 
+**See [`cline_sandbox/`](cline_sandbox/README.md) for the full FastAPI
+wrapper** that combines every layer below and exposes a dashboard, SSE
+streams, and pause/stop/kill controls for running
+[Cline](https://github.com/cline/cline) (or any agent) in dangerous (`-y`)
+mode safely. Launch with `bash run_cline_sandbox.sh` or
+`uv run python -m cline_sandbox`.
+
+---
+
 Demonstrates three Linux kernel features for containing AI agents, exercised
 at progressively stronger isolation levels:
 
