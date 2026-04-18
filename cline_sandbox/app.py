@@ -158,7 +158,7 @@ def create_app(
             "missing": missing,
             "active_sessions": sum(
                 1 for s in manager.list()
-                if s.state in SessionState.ALIVE
+                if s.state in SessionState.ACTIVE
             ),
             "total_sessions": len(manager.list()),
         }
@@ -275,7 +275,10 @@ def create_app(
     )
     async def get_events(
         session_id: str = PathParam(..., pattern=SESSION_ID_PATTERN),
-        limit: Optional[int] = None,
+        limit: Optional[int] = Query(
+            None, ge=1, le=10000,
+            description="Most recent N events (null = all).",
+        ),
     ) -> List[Event]:
         try:
             events = manager.historical_events(session_id, limit=limit)

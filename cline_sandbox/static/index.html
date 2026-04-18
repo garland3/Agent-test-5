@@ -181,18 +181,24 @@ async function api(path, opts = {}) {
 }
 
 async function refreshHealth() {
+  const healthEl = $("health");
+  // `h.status` and `e.message` can carry server-controlled text; build
+  // the element piecemeal with only the static marker in innerHTML and
+  // the dynamic portion as a text node to avoid XSS via `innerHTML`.
   try {
     const h = await api("/healthz");
     const cfg = await api("/config");
     const dotClass = h.status === "ok" ? "ok" : "warn";
-    $("health").innerHTML = `<span class="dot ${dotClass}"></span>${h.status} — `
-      + `${h.active_sessions} active / ${h.total_sessions} total`;
+    healthEl.innerHTML = `<span class="dot ${dotClass}"></span>`;
+    healthEl.appendChild(document.createTextNode(
+      `${h.status} — ${h.active_sessions} active / ${h.total_sessions} total`
+    ));
     $("config-blurb").textContent =
       `agent: ${cfg.agent_command} · seccomp: ${cfg.enable_seccomp} · `
       + `netns: ${cfg.unshare_net ? "isolated" : "shared"}`;
   } catch (e) {
-    $("health").innerHTML =
-      `<span class="dot err"></span>offline: ${e.message}`;
+    healthEl.innerHTML = `<span class="dot err"></span>`;
+    healthEl.appendChild(document.createTextNode(`offline: ${e.message}`));
   }
 }
 

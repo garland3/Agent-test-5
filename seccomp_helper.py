@@ -302,8 +302,16 @@ def build_allowlist_filter(allowed_syscalls: list[str],
     instructions.append(bpf_jump(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0))
     instructions.append(bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS))
 
-    # 3. Load syscall number (offset 0 in seccomp_data)
+    # 3. Load syscall number (offset 0 in seccomp_data), then kill if
+    # the x32 ABI bit is set. Without this an attacker can invoke
+    # syscalls via the x32 ABI (nr | 0x40000000) and bypass every JEQ
+    # below. BPF_JSET tests (A & K) != 0 without modifying A.
     instructions.append(bpf_stmt(BPF_LD | BPF_W | BPF_ABS, OFFSET_NR))
+    X32_SYSCALL_BIT = 0x40000000
+    BPF_JSET = 0x40
+    instructions.append(bpf_jump(BPF_JMP | BPF_JSET | BPF_K,
+                                 X32_SYSCALL_BIT, 0, 1))
+    instructions.append(bpf_stmt(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS))
 
     # 4. For each allowed syscall, add a JEQ check
     #    Jump to ALLOW if match, fall through otherwise

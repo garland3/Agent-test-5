@@ -50,6 +50,10 @@ class SessionState:
 
     TERMINAL = frozenset({COMPLETED, FAILED, KILLED, ERROR})
     ALIVE = frozenset({STARTING, RUNNING, PAUSED, STOPPING})
+    # "Active" from the admission-control perspective — includes PENDING
+    # so concurrent create() calls can't bypass max_sessions during the
+    # window between registry insert and _spawn() flipping state.
+    ACTIVE = frozenset({PENDING, STARTING, RUNNING, PAUSED, STOPPING})
 
 
 class SessionNotFoundError(KeyError):
@@ -86,6 +90,11 @@ class Session:
     reader_tasks: List[asyncio.Task] = field(default_factory=list, repr=False)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     timeout_task: Optional[asyncio.Task] = field(default=None, repr=False)
+    # Set when stop() escalates to SIGKILL (grace expired). Needed so
+    # _await_exit can distinguish a graceful-stop completion from a
+    # forced kill — both pass through state=STOPPING but only the
+    # second should map to KILLED.
+    stop_escalated: bool = False
 
     def summary(self) -> Dict[str, Any]:
         return {
@@ -188,13 +197,13 @@ class SessionManager:
         self._validate_extra_binds(extra_ro_binds, extra_rw_binds)
 
         async with self._registry_lock:
-            alive = sum(
+            active = sum(
                 1 for s in self._sessions.values()
-                if s.state in SessionState.ALIVE
+                if s.state in SessionState.ACTIVE
             )
-            if alive >= self.settings.max_sessions:
+            if active >= self.settings.max_sessions:
                 raise InvalidStateError(
-                    f"Too many active sessions ({alive}). "
+                    f"Too many active sessions ({active}). "
                     f"Max is {self.settings.max_sessions}."
                 )
 
@@ -231,7 +240,9 @@ class SessionManager:
 
         # Build the sandbox command and launch the process.
         builder = SandboxBuilder(
-            ro_binds=self.settings.ro_binds(),
+            ro_binds=(
+                list(self.settings.ro_binds()) + list(extra_ro_binds)
+            ),
             rw_binds=list(self.settings.extra_rw_binds) + list(extra_rw_binds),
             unshare_net=self.settings.unshare_net,
             enable_seccomp=self.settings.enable_seccomp,
@@ -401,7 +412,13 @@ class SessionManager:
             # state the operator asked for is authoritative, not the
             # raw rc.
             if prev == SessionState.STOPPING:
-                final = SessionState.COMPLETED
+                # A STOPPING session that escalated to SIGKILL is a
+                # forced kill, not a clean completion — the agent
+                # ignored SIGTERM and the grace timer blew past.
+                final = (
+                    SessionState.KILLED if session.stop_escalated
+                    else SessionState.COMPLETED
+                )
             elif rc == 0:
                 final = SessionState.COMPLETED
             elif rc < 0:
@@ -420,8 +437,22 @@ class SessionManager:
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     task.cancel()
         # Fan-out a sentinel so SSE consumers cleanly terminate.
+        # We must not `await` on put here: we drop events on QueueFull
+        # elsewhere, so a slow subscriber's queue can already be full —
+        # a blocking put would hang _await_exit and leak the task. Drain
+        # one slot if needed and drop the sentinel on definitive failure.
         for q in list(session.subscribers):
-            await q.put(None)
+            try:
+                q.put_nowait(None)
+            except asyncio.QueueFull:
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    q.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
         if session.timeout_task and not session.timeout_task.done():
             session.timeout_task.cancel()
 
@@ -645,6 +676,7 @@ class SessionManager:
             assert session.process is not None
             await asyncio.wait_for(session.process.wait(), timeout=grace_seconds)
         except asyncio.TimeoutError:
+            session.stop_escalated = True
             await self.kill(session_id, reason="stop-grace-expired")
 
     async def kill(self, session_id: str, *, reason: str = "requested") -> None:
